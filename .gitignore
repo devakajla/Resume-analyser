@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.env
+venv/
+data/sample_resumes/*.pdf
+data/sample_resumes/*.docx
+data/sample_resumes/*.png
+data/sample_jds/*.txt
