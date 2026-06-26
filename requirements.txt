@@ -1,0 +1,9 @@
+pymupdf
+python-docx
+easyocr
+sentence-transformers
+numpy
+requests
+fastapi
+uvicorn
+streamlit
