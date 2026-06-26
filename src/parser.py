@@ -16,15 +16,37 @@ def detect_format(file_path):
 
 
 def extract_from_pdf(file_path):
-    doc = fitz.open(file_path)
+    try:
+        doc = fitz.open(file_path)
+    except Exception:
+        return ""
+
     text = ""
     for page in doc:
         page_text = page.get_text()
         text += page_text
 
-    # If text is too short, probably a scanned PDF — use OCR
+    # If text is too short, it's a scanned PDF — OCR each page as image
     if len(text.strip()) < 50:
-        text = extract_from_image(file_path)
+        text = ""
+        for page in doc:
+            # Convert page to image
+            pix = page.get_pixmap(dpi=200)
+            img_bytes = pix.tobytes("png")
+
+            # Save temp image for OCR
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                tmp.write(img_bytes)
+                tmp_path = tmp.name
+
+            # OCR the image
+            page_text = extract_from_image(tmp_path)
+            text += page_text + "\n"
+
+            # Cleanup temp file
+            import os as _os
+            _os.remove(tmp_path)
 
     doc.close()
     return text
