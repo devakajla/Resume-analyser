@@ -1,14 +1,76 @@
+from fastapi import FastAPI, UploadFile, File, Form
+from fastapi.responses import JSONResponse
 from src.parser import parse_resume
 from src.extractor import extract_entities
 from src.scorer import score_resume
-from src.config import SUPPORTED_FORMATS, MIN_SCORE_THRESHOLD
 from src.question_gen import generate_questions
+from src.config import MIN_SCORE_THRESHOLD
+import requests
 import os
-import json, requests
+import shutil
+import tempfile
+
+app = FastAPI(
+    title="Resume Analyser API",
+    description="Upload resumes, match against JD, get ranked candidates with HR questions"
+)
+
+# In-memory storage
+parsed_resumes = {}
+current_jd = {"text": "", "skills": []}
+ranked_results = []
+
+UPLOAD_DIR = "data/uploaded_resumes"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
-def extract_jd_skills(jd_text):
-    """Extract required skills from JD using Ollama."""
+# ============ ENDPOINTS ============
+
+@app.get("/")
+def home():
+    return {"message": "Resume Analyser API is running", "docs": "/docs"}
+
+@app.post("/upload-resumes")
+async def upload_resumes(files: list[UploadFile] = File(description="Upload resume files")):
+    """Upload one or more resume files (PDF, DOCX, TXT, PNG, JPG)."""
+    global parsed_resumes
+    results = []
+    errors = []
+
+    for file in files:
+        filepath = os.path.join(UPLOAD_DIR, file.filename)
+        try:
+            with open(filepath, "wb") as f:
+                content = await file.read()
+                f.write(content)
+
+            text = parse_resume(filepath)
+            entities = extract_entities(text)
+            parsed_resumes[file.filename] = {
+                "text": text,
+                "entities": entities
+            }
+            results.append({
+                "file": file.filename,
+                "name": entities.get("name"),
+                "email": entities.get("email"),
+                "skills_count": len(entities.get("skills", []))
+            })
+        except Exception as e:
+            errors.append({"file": file.filename, "error": str(e)})
+
+    return {
+        "parsed": len(results),
+        "failed": len(errors),
+        "results": results,
+        "errors": errors
+    }
+
+@app.post("/set-jd")
+def set_jd(jd_text: str = Form(...)):
+    """Submit a Job Description — skills will be auto-extracted."""
+    global current_jd
+
     try:
         response = requests.post("http://localhost:11434/api/generate", json={
             "model": "qwen2.5-coder:7b",
@@ -23,159 +85,108 @@ Skills (comma-separated):""",
         })
 
         if response.status_code == 200:
-            raw = response.json().get('response', '')
-            skills = [s.strip().strip('-').strip('•').strip() for s in raw.split(',')]
-            return [s for s in skills if s and len(s) < 50]
+            raw = response.json().get("response", "")
+            skills = [s.strip().strip("-").strip("•") for s in raw.split(",")]
+            skills = [s for s in skills if s and len(s) < 50]
         else:
-            return []
+            skills = []
     except:
-        print("Warning: Ollama not running. Enter skills manually.")
-        manual = input("Enter required skills (comma-separated): ")
-        return [s.strip() for s in manual.split(',')]
+        skills = []
 
-def process_folder(folder_path):
-    """Parse all resumes in a folder, return extracted data."""
-    if not os.path.isdir(folder_path):
-        raise FileNotFoundError(f"Folder not found: {folder_path}")
-
-    results = {}
-    errors = []
-
-    for filename in os.listdir(folder_path):
-        ext = os.path.splitext(filename)[1].lower()
-        if ext not in SUPPORTED_FORMATS:
-            continue
-
-        filepath = os.path.join(folder_path, filename)
-        try:
-            text = parse_resume(filepath)
-            entities = extract_entities(text)
-            results[filename] = {
-                'text': text,
-                'entities': entities
-            }
-            print(f"  Parsed: {filename} ({entities.get('name', 'Unknown')})")
-        except Exception as e:
-            errors.append({'file': filename, 'error': str(e)})
-            print(f"  Failed: {filename} — {e}")
-
-    return results, errors
+    current_jd = {"text": jd_text, "skills": skills}
+    return {
+        "message": "JD set successfully",
+        "extracted_skills": skills,
+        "skill_count": len(skills)
+    }
 
 
-def rank_against_jd(parsed_resumes, jd_text, jd_skills):
-    """Score and rank all parsed resumes against a JD."""
-    ranked = []
+@app.post("/rank")
+def rank_resumes():
+    """Rank all uploaded resumes against the current JD."""
+    global ranked_results
 
+    if not parsed_resumes:
+        return JSONResponse(status_code=400, content={"error": "No resumes uploaded. Use /upload-resumes first."})
+    if not current_jd["text"]:
+        return JSONResponse(status_code=400, content={"error": "No JD set. Use /set-jd first."})
+
+    ranked_results = []
     for filename, data in parsed_resumes.items():
-        result = score_resume(data['text'], jd_text, jd_skills)
-        result['file'] = filename
-        result['entities'] = data['entities']
-        ranked.append(result)
+        result = score_resume(data["text"], current_jd["text"], current_jd["skills"])
+        result["file"] = filename
+        result["name"] = data["entities"].get("name")
+        result["email"] = data["entities"].get("email")
+        result["entities"] = data["entities"]
+        ranked_results.append(result)
 
-    ranked.sort(key=lambda x: x['final_score'], reverse=True)
-    return ranked
+    ranked_results.sort(key=lambda x: x["final_score"], reverse=True)
 
+    shortlisted = [r for r in ranked_results if r["final_score"] >= MIN_SCORE_THRESHOLD]
+    not_shortlisted = [r for r in ranked_results if r["final_score"] < MIN_SCORE_THRESHOLD]
 
-def display_results(ranked, threshold=MIN_SCORE_THRESHOLD):
-    """Pretty print ranked results."""
-    print("\n" + "=" * 60)
-    print("RESUME RANKING RESULTS")
-    print("=" * 60)
-
-    above = [r for r in ranked if r['final_score'] >= threshold]
-    below = [r for r in ranked if r['final_score'] < threshold]
-
-    if above:
-        print(f"\n SHORTLISTED ({len(above)} candidates above {threshold} threshold):\n")
-        for i, r in enumerate(above, 1):
-            print(f"  {i}. {r['entities'].get('name', 'Unknown')} ({r['file']})")
-            print(f"     Score: {r['final_score']} | Embedding: {r['embedding_score']} | Skills: {r['skill_score']}")
-            print(f"     Matched: {r['matched_skills']}")
-            print(f"     Missing: {r['missing_skills']}")
-            print()
-
-    if below:
-        print(f"\n NOT SHORTLISTED ({len(below)} candidates below threshold):\n")
-        for r in below:
-            print(f"  - {r['entities'].get('name', 'Unknown')} ({r['file']}) — Score: {r['final_score']}")
-        print()
-
-
-def generate_candidate_questions(ranked, jd_text, jd_skills):
-    """Let user select a candidate and generate HR questions."""
-    shortlisted = [r for r in ranked if r['final_score'] >= MIN_SCORE_THRESHOLD]
-
-    if not shortlisted:
-        print("No shortlisted candidates to generate questions for.")
-        return
-
-    print("\nSelect a candidate for interview questions:")
-    for i, r in enumerate(shortlisted, 1):
-        print(f"  {i}. {r['entities'].get('name', 'Unknown')} — Score: {r['final_score']}")
-
-    try:
-        choice = int(input("\nEnter number (0 to skip): "))
-        if choice == 0:
-            return
-        if 1 <= choice <= len(shortlisted):
-            selected = shortlisted[choice - 1]
-            name = selected['entities'].get('name', 'Unknown')
-            print(f"\nGenerating HR questions for {name}...\n")
-
-            questions = generate_questions(
-                resume_entities=selected['entities'],
-                jd_text=jd_text,
-                jd_skills=jd_skills,
-                matched_skills=selected['matched_skills'],
-                missing_skills=selected['missing_skills']
-            )
-            print(questions)
-        else:
-            print("Invalid choice.")
-    except ValueError:
-        print("Invalid input.")
+    return {
+        "total": len(ranked_results),
+        "shortlisted_count": len(shortlisted),
+        "shortlisted": [{
+            "rank": i + 1,
+            "name": r["name"],
+            "file": r["file"],
+            "final_score": r["final_score"],
+            "embedding_score": r["embedding_score"],
+            "skill_score": r["skill_score"],
+            "llm_score": r.get("llm_score", "N/A"),
+            "matched_skills": r["matched_skills"],
+            "missing_skills": r["missing_skills"]
+        } for i, r in enumerate(shortlisted)],
+        "not_shortlisted": [{
+            "name": r["name"],
+            "file": r["file"],
+            "final_score": r["final_score"]
+        } for r in not_shortlisted]
+    }
 
 
-if __name__ == "__main__":
-    RESUME_FOLDER = "data/sample_resumes"
+@app.post("/generate-questions/{filename}")
+def generate_questions_for_resume(filename: str):
+    """Generate HR interview questions for a specific resume."""
+    if filename not in parsed_resumes:
+        return JSONResponse(status_code=404, content={"error": f"Resume '{filename}' not found. Upload it first."})
+    if not current_jd["text"]:
+        return JSONResponse(status_code=400, content={"error": "No JD set. Use /set-jd first."})
 
-    # Step 0: Take JD input from user
-    print("=" * 60)
-    print("RESUME ANALYSER")
-    print("=" * 60)
-    print("\nPaste the Job Description (press Enter twice when done):\n")
+    # Find the scored result for this resume
+    resume_result = None
+    for r in ranked_results:
+        if r["file"] == filename:
+            resume_result = r
+            break
 
-    lines = []
-    while True:
-        line = input()
-        if line == "":
-            if lines and lines[-1] == "":
-                break
-            lines.append(line)
-        else:
-            lines.append(line)
-    JD_TEXT = "\n".join(lines).strip()
+    matched = resume_result["matched_skills"] if resume_result else []
+    missing = resume_result["missing_skills"] if resume_result else current_jd["skills"]
 
-    # Extract skills from JD using Ollama
-    print("\nExtracting skills from JD...")
-    JD_SKILLS = extract_jd_skills(JD_TEXT)
-    print(f"Extracted Skills: {JD_SKILLS}")
+    questions = generate_questions(
+        resume_entities=parsed_resumes[filename]["entities"],
+        jd_text=current_jd["text"],
+        jd_skills=current_jd["skills"],
+        matched_skills=matched,
+        missing_skills=missing
+    )
 
-    print("\nStep 1: Parsing all resumes...")
-    parsed, errors = process_folder(RESUME_FOLDER)
-    print(f"\nParsed: {len(parsed)} | Failed: {len(errors)}")
-
-    print("\nStep 2: Scoring against JD...")
-    ranked = rank_against_jd(parsed, JD_TEXT, JD_SKILLS)
-
-    display_results(ranked)
-
-    if errors:
-        print("ERRORS:")
-        for e in errors:
-            print(f"  {e['file']}: {e['error']}")
-
-    print("\nStep 3: Interview Question Generation")
-    generate_candidate_questions(ranked, JD_TEXT, JD_SKILLS)
+    return {
+        "candidate": parsed_resumes[filename]["entities"].get("name"),
+        "file": filename,
+        "questions": questions
+    }
 
 
+@app.get("/status")
+def status():
+    """Check current state — how many resumes uploaded, JD set or not."""
+    return {
+        "resumes_uploaded": len(parsed_resumes),
+        "resume_files": list(parsed_resumes.keys()),
+        "jd_set": bool(current_jd["text"]),
+        "jd_skills": current_jd["skills"],
+        "results_available": len(ranked_results) > 0
+    }
