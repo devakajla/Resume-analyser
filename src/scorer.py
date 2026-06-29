@@ -1,5 +1,7 @@
 from src.embedder import generate_embedding, calculate_similarity
 from src.extractor import extract_entities
+from src.llm import call_llm
+
 
 import sys
 import os
@@ -10,12 +12,10 @@ from src.extractor import extract_entities
 import requests
 
 def llm_match_score(resume_text, jd_text):
-    try:
-        clean_resume = ' '.join(resume_text.split())[:1500]
-        
-        response = requests.post("http://localhost:11434/api/generate", json={
-            "model": "qwen2.5-coder:7b",
-            "prompt": f"""Rate resume-job match from 0.0 to 1.0. Reply with ONLY a number.
+    clean_resume = ' '.join(resume_text.split())[:1500]
+
+    raw = call_llm(
+        prompt=f"""Rate resume-job match from 0.0 to 1.0. Reply with ONLY a number.
 
 0.8-1.0 = Strong match (most skills and experience align)
 0.5-0.7 = Partial match (some relevant skills)
@@ -29,18 +29,16 @@ JOB REQUIREMENTS:
 {jd_text[:800]}
 
 Score:""",
-            "stream": False,
-            "options": {"temperature": 0.1, "num_predict": 10}
-        })
-        if response.status_code == 200:
-            raw = response.json().get('response', '0.0').strip()
-            import re as _re
-            match = _re.search(r'(\d+\.?\d*)', raw)
-            if match:
-                return min(float(match.group(1)), 1.0)
-        return 0.0
-    except:
-        return 0.0
+        max_tokens=10,
+        temperature=0.1
+    )
+
+    import re as _re
+    match = _re.search(r'(\d+\.?\d*)', raw)
+    if match:
+        return min(float(match.group(1)), 1.0)
+    return 0.0
+
 
 
 def calculate_skill_match(resume_text, resume_skills, jd_skills):

@@ -6,6 +6,7 @@ from src.extractor import extract_entities
 from src.scorer import score_resume
 from src.question_gen import generate_questions
 from src.config import MIN_SCORE_THRESHOLD
+from src.llm import call_llm
 import requests
 import os
 import shutil
@@ -76,38 +77,36 @@ async def upload_resumes(files: list[UploadFile] = File(description="Upload resu
 
 @app.post("/set-jd")
 def set_jd(jd_text: str = Form(...)):
-    """Submit a Job Description — skills will be auto-extracted."""
     global current_jd
 
-    try:
-        response = requests.post("http://localhost:11434/api/generate", json={
-            "model": "qwen2.5-coder:7b",
-            "prompt": f"""Extract the key required skills from this job description. Return ONLY a comma-separated list of skills, nothing else.
+    raw = call_llm(
+        prompt=f"""Extract the key required skills from this job description. Return ONLY a comma-separated list of skills, nothing else. No duplicates.
 
 Job Description:
 {jd_text}
 
 Skills (comma-separated):""",
-            "stream": False,
-            "options": {"temperature": 0.1, "num_predict": 200}
-        })
+        max_tokens=200,
+        temperature=0.1
+    )
 
-        if response.status_code == 200:
-            raw = response.json().get("response", "")
-            skills = [s.strip().strip("-").strip("•") for s in raw.split(",")]
-            skills = [s for s in skills if s and len(s) < 50]
-        else:
-            skills = []
-    except:
-        skills = []
+    skills = [s.strip().strip("-").strip("•") for s in raw.split(",")]
+    skills = [s for s in skills if s and len(s) < 50]
+    
+    # Remove duplicates
+    seen = set()
+    unique_skills = []
+    for s in skills:
+        if s.lower() not in seen:
+            seen.add(s.lower())
+            unique_skills.append(s)
 
-    current_jd = {"text": jd_text, "skills": skills}
+    current_jd = {"text": jd_text, "skills": unique_skills}
     return {
         "message": "JD set successfully",
-        "extracted_skills": skills,
-        "skill_count": len(skills)
+        "extracted_skills": unique_skills,
+        "skill_count": len(unique_skills)
     }
-
 
 @app.post("/rank")
 def rank_resumes():

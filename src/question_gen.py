@@ -1,14 +1,13 @@
 import requests
 import json
 
+from src.llm import call_llm
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 MODEL_NAME = "qwen2.5-coder:7b"
 
 
 def generate_questions(resume_entities, jd_text, jd_skills, matched_skills, missing_skills):
-    """Generate HR interview questions based on resume vs JD analysis."""
-
     name = resume_entities.get('name', 'the candidate')
     skills = resume_entities.get('skills', [])
     experience = resume_entities.get('experience', 'Not available')
@@ -29,41 +28,23 @@ SKILLS MISSING: {', '.join(missing_skills)}
 Generate exactly 10 interview questions in these categories:
 
 KNOWLEDGE VERIFICATION (3 questions):
-- Questions to check if the candidate truly understands the skills they claimed on their resume
-- Not coding questions — ask them to explain concepts, compare approaches, describe how things work
+- Questions to check if the candidate truly understands the skills they claimed
+- Not coding questions — ask them to explain concepts, compare approaches
 
 EXPERIENCE VALIDATION (3 questions):
-- Questions about their past work — what they did, what challenges they faced, what they learned
-- Behavioral questions to verify their resume claims are real
+- Questions about their past work — what they did, challenges faced, what they learned
 
 GAP ASSESSMENT (2 questions):
-- Questions about skills required in the JD but missing from their resume
-- Check if they have any awareness or willingness to learn
+- Questions about skills required in JD but missing from resume
 
 CONFIDENCE CHECK (2 questions):
-- Ask them to rate themselves on a skill, then follow up with a deeper question
-- Tests honesty and self-awareness
+- Ask them to rate themselves on a skill, then follow up deeper
 
-Format each question with its category label. Keep questions conversational, not academic."""
+Keep questions conversational, not academic."""
 
-    try:
-        response = requests.post(OLLAMA_URL, json={
-            "model": MODEL_NAME,
-            "prompt": prompt,
-            "stream": False,
-            "options": {
-                "temperature": 0.4,
-                "num_predict": 1000
-            }
-        })
+    result = call_llm(prompt, max_tokens=1000, temperature=0.4)
+    return result if result else "Could not generate questions."
 
-        if response.status_code == 200:
-            return response.json().get('response', 'No questions generated.')
-        else:
-            return f"Error: {response.status_code} — {response.text}"
-
-    except requests.ConnectionError:
-        return "Error: Ollama not running. Start it with 'ollama serve' in another terminal."
 
 
 # Quick test

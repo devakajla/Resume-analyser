@@ -109,31 +109,35 @@ def extract_entities(text):
         'experience': extract_experience(text),
     }
 
-
-import requests
+from src.llm import call_llm
 
 
 def extract_skills_llm(text):
-    """Fallback: use LLM to extract skills when regex fails."""
-    try:
-        response = requests.post("http://localhost:11434/api/generate", json={
-            "model": "qwen2.5-coder:7b",
-            "prompt": f"""Extract the technical skills from this resume. Return ONLY a comma-separated list of skills, nothing else.
+    raw = call_llm(
+        prompt=f"""Read this entire resume carefully and extract ALL technical skills, tools, programming languages, frameworks, libraries, platforms, methodologies, and technologies mentioned anywhere — in skills sections, experience descriptions, project descriptions, and education.
+
+Return ONLY a comma-separated list. No duplicates. No explanations.
 
 Resume:
-{text[:2000]}
+{text[:4000]}
 
-Skills (comma-separated):""",
-            "stream": False,
-            "options": {"temperature": 0.1, "num_predict": 200}
-        })
-        if response.status_code == 200:
-            raw = response.json().get("response", "")
-            skills = [s.strip().strip("-").strip("•") for s in raw.split(",")]
-            return [s for s in skills if s and len(s) < 50]
-    except:
-        pass
+All skills (comma-separated, no duplicates):""",
+        max_tokens=300,
+        temperature=0.1
+    )
+
+    if raw:
+        skills = [s.strip().strip("-").strip("•").strip("*") for s in raw.split(",")]
+        skills = [s for s in skills if s and len(s) < 50]
+        seen = set()
+        unique = []
+        for s in skills:
+            if s.lower() not in seen:
+                seen.add(s.lower())
+                unique.append(s)
+        return unique
     return []
+
 
 # Quick test
 if __name__ == "__main__":
