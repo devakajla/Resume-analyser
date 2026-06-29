@@ -6,12 +6,14 @@ from src.extractor import extract_entities
 from src.scorer import score_resume
 from src.question_gen import generate_questions
 from src.config import MIN_SCORE_THRESHOLD
+from dotenv import load_dotenv
 from src.llm import call_llm
 import requests
 import os
 import shutil
 import tempfile
 
+load_dotenv()
 app = FastAPI(
     title="Resume Analyser API",
     description="Upload resumes, match against JD, get ranked candidates with HR questions"
