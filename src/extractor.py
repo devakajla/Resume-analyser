@@ -94,15 +94,46 @@ def extract_experience(text):
 
 def extract_entities(text):
     normalized = normalize_spaced_headers(text)
+    skills = extract_skills(text)
+    
+    # LLM fallback if regex found no skills
+    if not skills:
+        skills = extract_skills_llm(text)
+    
     return {
         'name': extract_name(normalized),
         'email': extract_email(text),
         'phone': extract_phone(text),
-        'skills': extract_skills(text),
+        'skills': skills,
         'education': extract_education(text),
         'experience': extract_experience(text),
     }
 
+
+import requests
+
+
+def extract_skills_llm(text):
+    """Fallback: use LLM to extract skills when regex fails."""
+    try:
+        response = requests.post("http://localhost:11434/api/generate", json={
+            "model": "qwen2.5-coder:7b",
+            "prompt": f"""Extract the technical skills from this resume. Return ONLY a comma-separated list of skills, nothing else.
+
+Resume:
+{text[:2000]}
+
+Skills (comma-separated):""",
+            "stream": False,
+            "options": {"temperature": 0.1, "num_predict": 200}
+        })
+        if response.status_code == 200:
+            raw = response.json().get("response", "")
+            skills = [s.strip().strip("-").strip("•") for s in raw.split(",")]
+            return [s for s in skills if s and len(s) < 50]
+    except:
+        pass
+    return []
 
 # Quick test
 if __name__ == "__main__":

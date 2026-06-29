@@ -1,5 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from src.parser import parse_resume
 from src.extractor import extract_entities
 from src.scorer import score_resume
@@ -13,6 +14,13 @@ import tempfile
 app = FastAPI(
     title="Resume Analyser API",
     description="Upload resumes, match against JD, get ranked candidates with HR questions"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # In-memory storage
