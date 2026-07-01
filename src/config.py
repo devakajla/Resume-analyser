@@ -1,5 +1,6 @@
 import os
-
+from dotenv import load_dotenv
+load_dotenv()
 EMBEDDING_MODEL = 'all-mpnet-base-v2'
 EMBEDDING_WEIGHT = 0.50
 SKILL_WEIGHT = 0.50

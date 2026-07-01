@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 import requests
 from src.config import OPENROUTER_API_KEY, OPENROUTER_MODEL
 

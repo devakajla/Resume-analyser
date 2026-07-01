@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.parser import parse_resume
 from src.extractor import extract_entities
 from src.scorer import score_resume
+from src.ats_scorer import calculate_ats_score
 from src.question_gen import generate_questions
 from src.config import MIN_SCORE_THRESHOLD
 from dotenv import load_dotenv
@@ -199,3 +200,23 @@ def status():
         "jd_skills": current_jd["skills"],
         "results_available": len(ranked_results) > 0
     }
+
+@app.post("/ats-score/{filename}")
+def get_ats_score(filename: str):
+    """Get ATS compatibility score for a resume."""
+    if filename not in parsed_resumes:
+        return JSONResponse(status_code=404, content={"error": f"Resume '{filename}' not found."})
+
+    data = parsed_resumes[filename]
+    file_path = os.path.join(UPLOAD_DIR, filename)
+
+    result = calculate_ats_score(
+        text=data["text"],
+        file_path=file_path,
+        jd_skills=current_jd.get("skills", []),
+        entities=data["entities"]
+    )
+
+    result["candidate"] = data["entities"].get("name")
+    result["file"] = filename
+    return result
