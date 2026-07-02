@@ -1,38 +1,41 @@
-import { useState } from 'react'
-import axios from 'axios'
+import React from 'react'
 import CandidateCard from './CandidateCard'
 
-const API = 'http://127.0.0.1:8000'
-
-function RankingResults({ uploadDone, jdDone, onQuestions }) {
-  const [result, setResult] = useState(null)
-  const [loading, setLoading] = useState(false)
-
-  const handleRank = async () => {
-    setLoading(true)
-    try {
-      const res = await axios.post(`${API}/rank`)
-      setResult(res.data)
-    } catch (err) {
-      alert('Ranking failed: ' + err.message)
-    }
-    setLoading(false)
+function RankingResults({ uploadDone, jdDone, result, loading, onRank, onQuestions, onAtsScore }) {
+  if (!uploadDone || !jdDone) {
+    return (
+      <div className="empty-state card">
+        <span className="empty-icon">📊</span>
+        <h3>Setup Incomplete</h3>
+        <p>Before you can rank candidates, please complete the configuration in the <strong>Setup & Upload</strong> tab:</p>
+        <div className="setup-checklist">
+          <div className={`checklist-item ${uploadDone ? 'done' : ''}`}>
+            <span className="check-bullet">{uploadDone ? '✓' : '○'}</span>
+            <span>Upload one or more candidate resumes</span>
+          </div>
+          <div className={`checklist-item ${jdDone ? 'done' : ''}`}>
+            <span className="check-bullet">{jdDone ? '✓' : '○'}</span>
+            <span>Set job description text and extract skills</span>
+          </div>
+        </div>
+      </div>
+    )
   }
-
-  if (!uploadDone || !jdDone) return null
 
   return (
     <div className="card">
       {!result ? (
-        <>
-          <div className="card-header">
-            <span className="step-number">3</span>
-            <h2>Rank Candidates</h2>
+        <div className="rank-prompt-area">
+          <div className="card-header" style={{ justifyContent: 'center', marginBottom: '12px' }}>
+            <h2>Ready to Analyze and Rank Resumes</h2>
           </div>
-          <button className="btn btn-success" onClick={handleRank} disabled={loading}>
-            {loading ? 'Ranking...' : 'Rank All Resumes Against JD'}
+          <p className="rank-prompt-text">
+            Compare all uploaded resumes against the extracted job description requirements. We will analyze semantic similarity, keyword alignment, and run deep LLM matches.
+          </p>
+          <button className="btn btn-success" onClick={onRank} disabled={loading} style={{ maxWidth: '360px', margin: '0 auto' }}>
+            {loading ? 'Analyzing & Ranking...' : 'Rank All Resumes Against JD'}
           </button>
-        </>
+        </div>
       ) : (
         <>
           <div className="card-header">
@@ -52,6 +55,7 @@ function RankingResults({ uploadDone, jdDone, onQuestions }) {
                   rank={r.rank}
                   isShortlisted={true}
                   onGenerateQuestions={onQuestions}
+                  onAtsScore={onAtsScore}
                 />
               ))}
             </div>

@@ -1,4 +1,4 @@
-function CandidateCard({ candidate, rank, isShortlisted, onGenerateQuestions }) {
+function CandidateCard({ candidate, rank, isShortlisted, onGenerateQuestions, onAtsScore }) {
   return (
     <div className={`candidate-card ${isShortlisted ? 'shortlisted' : 'not-shortlisted'}`}>
       <div className="candidate-top">
@@ -39,9 +39,14 @@ function CandidateCard({ candidate, rank, isShortlisted, onGenerateQuestions }) 
             </div>
           </div>
 
-          <button className="btn btn-outline" onClick={() => onGenerateQuestions(candidate.file)}>
-            Generate HR Questions
-          </button>
+          <div className="candidate-actions">
+            <button className="btn btn-outline" onClick={() => onGenerateQuestions(candidate.file)}>
+              Generate HR Questions
+            </button>
+            <button className="btn btn-outline btn-ats" onClick={() => onAtsScore(candidate.file)}>
+              Check ATS Score
+            </button>
+          </div>
         </>
       )}
     </div>
