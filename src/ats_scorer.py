@@ -1,6 +1,77 @@
 import re
 from src.extractor import extract_entities
 
+import fitz
+
+
+def check_ats_readability(file_path):
+    """Analyze the actual PDF layout for ATS compatibility."""
+    issues = []
+    score = 15
+
+    ext = file_path.lower().split('.')[-1]
+
+    # Non-PDF formats
+    if ext in ('png', 'jpg', 'jpeg'):
+        return 3, ["Image file — ATS cannot parse images at all. Convert to PDF/DOCX"]
+    if ext == 'docx':
+        return 13, ["DOCX format — generally ATS-friendly"]
+    if ext != 'pdf':
+        return 8, ["Non-standard format"]
+
+    try:
+        doc = fitz.open(file_path)
+
+        # 1. Check if scanned (no text layer)
+        total_text = ""
+        for page in doc:
+            total_text += page.get_text()
+        if len(total_text.strip()) < 50:
+            doc.close()
+            return 2, ["Scanned/image PDF — no text layer. ATS cannot read this. Use a text-based PDF"]
+
+        # 2. Check for images (graphics that ATS ignores)
+        image_count = 0
+        for page in doc:
+            image_count += len(page.get_images())
+        if image_count > 3:
+            score -= 3
+            issues.append(f"{image_count} images detected — ATS ignores images, keep content as text")
+
+        # 3. Check for multi-column layout
+        page = doc[0]
+        blocks = page.get_text("blocks")
+        if blocks:
+            # Get x-positions of text blocks
+            x_positions = [round(b[0]) for b in blocks if b[4].strip()]
+            unique_left_margins = len(set(x_positions))
+            # Many different left margins = likely multi-column
+            if unique_left_margins > 4:
+                score -= 4
+                issues.append("Multi-column layout detected — ATS may read columns in wrong order. Use single-column")
+
+        # 4. Check for tables (detected via block alignment)
+        page_width = page.rect.width
+        wide_blocks = sum(1 for b in blocks if (b[2] - b[0]) > page_width * 0.7)
+        if wide_blocks < 2 and len(blocks) > 10:
+            score -= 2
+            issues.append("Possible table/box layout — ATS struggles with tables, use plain text")
+
+        # 5. Page count
+        if len(doc) > 2:
+            score -= 2
+            issues.append(f"{len(doc)} pages — keep resume to 1-2 pages")
+
+        doc.close()
+
+        if not issues:
+            issues.append("Clean single-column text layout — ATS-friendly")
+
+    except Exception as e:
+        return 8, [f"Could not analyze layout: {str(e)}"]
+
+    return max(score, 0), issues
+
 def check_contact_info(entities):
     score = 0
     details = []
@@ -265,6 +336,8 @@ def check_verb_tenses(text):
 def calculate_ats_score(text, file_path, jd_skills=None, entities=None):
     if entities is None:
         entities = extract_entities(text)
+    
+    
 
     checks = []
 
@@ -301,6 +374,9 @@ def calculate_ats_score(text, file_path, jd_skills=None, entities=None):
     s11, d11 = check_text_quality(text)
     checks.append({"category": "Text Quality", "score": s11, "max": 6, "details": d11})
 
+    s_read, d_read = check_ats_readability(file_path)
+    checks.append({"category": "ATS Readability", "score": s_read, "max": 15, "details": d_read})
+    
     skills_count = len(entities.get('skills', []))
     if skills_count >= 10:
         s12, d12 = 8, [f"{skills_count} skills listed — comprehensive"]
