@@ -12,23 +12,27 @@ from src.extractor import extract_entities
 import requests
 
 def llm_match_score(resume_text, jd_text):
-    clean_resume = ' '.join(resume_text.split())[:1500]
+    clean_resume = ' '.join(resume_text.split())[:2000]
 
     raw = call_llm(
-        prompt=f"""Rate resume-job match from 0.0 to 1.0. Reply with ONLY a number.
+        prompt=f"""You are a recruiter scoring how well a candidate fits a role. Consider not just exact skill matches, but also transferable skills, related experience, and overall capability.
 
-0.8-1.0 = Strong match (most skills and experience align)
-0.5-0.7 = Partial match (some relevant skills)
-0.2-0.4 = Weak match (few relevant skills)
-0.0-0.1 = No match
+Scoring guide:
+- 0.8-1.0 = Excellent fit (directly relevant background and skills)
+- 0.5-0.7 = Good fit (strong transferable skills, related domain)
+- 0.3-0.4 = Moderate fit (some relevant skills, could adapt with training)
+- 0.1-0.2 = Weak fit (mostly unrelated but some overlap)
+- 0.0 = No relevant background at all
 
-RESUME SUMMARY:
+Be fair — a candidate from a related technical field usually deserves at least 0.3, not 0. Only give 0.0 if there is genuinely zero relevant skill or experience.
+
+RESUME:
 {clean_resume}
 
-JOB REQUIREMENTS:
-{jd_text[:800]}
+JOB DESCRIPTION:
+{jd_text[:1000]}
 
-Score:""",
+Reply with ONLY a number between 0.0 and 1.0:""",
         max_tokens=10,
         temperature=0.1
     )
@@ -38,7 +42,6 @@ Score:""",
     if match:
         return min(float(match.group(1)), 1.0)
     return 0.0
-
 
 
 def calculate_skill_match(resume_text, resume_skills, jd_skills):
