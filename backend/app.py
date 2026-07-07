@@ -13,7 +13,14 @@ import requests
 import os
 import shutil
 import tempfile
+from fastapi import Depends
+from fastapi.security import OAuth2PasswordRequestForm
+from sqlalchemy.orm import Session
+from database import get_db, engine, Base
+import models
+from auth import hash_password, verify_password, create_access_token, get_current_user
 
+Base.metadata.create_all(bind=engine)
 load_dotenv()
 app = FastAPI(
     title="Resume Analyser API",
@@ -220,3 +227,64 @@ def get_ats_score(filename: str):
     result["candidate"] = data["entities"].get("name")
     result["file"] = filename
     return result
+
+
+from pydantic import BaseModel
+
+
+class SignupRequest(BaseModel):
+    name: str
+    email: str
+    password: str
+    role: str  # "hr" or "candidate"
+
+
+@app.post("/signup")
+def signup(data: SignupRequest, db: Session = Depends(get_db)):
+    # Check if email exists
+    existing = db.query(models.User).filter(models.User.email == data.email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    if data.role not in ("hr", "candidate"):
+        raise HTTPException(status_code=400, detail="Role must be 'hr' or 'candidate'")
+
+    user = models.User(
+        name=data.name,
+        email=data.email,
+        password=hash_password(data.password),
+        role=data.role
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    token = create_access_token({"user_id": user.id, "role": user.role})
+    return {
+        "token": token,
+        "user": {"id": user.id, "name": user.name, "email": user.email, "role": user.role}
+    }
+
+
+@app.post("/login")
+def login(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    # form.username = email, form.password = password
+    user = db.query(models.User).filter(models.User.email == form.username).first()
+    if not user or not verify_password(form.password, user.password):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    token = create_access_token({"user_id": user.id, "role": user.role})
+    return {
+        "token": token,
+        "user": {"id": user.id, "name": user.name, "email": user.email, "role": user.role}
+    }
+
+
+@app.get("/me")
+def get_me(current_user: models.User = Depends(get_current_user)):
+    return {
+        "id": current_user.id,
+        "name": current_user.name,
+        "email": current_user.email,
+        "role": current_user.role
+    }
