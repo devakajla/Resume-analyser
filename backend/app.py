@@ -9,6 +9,7 @@ from src.question_gen import generate_questions
 from src.config import MIN_SCORE_THRESHOLD
 from dotenv import load_dotenv
 from src.llm import call_llm
+from routers import jobs
 import requests
 import os
 import shutil
@@ -26,6 +27,7 @@ app = FastAPI(
     title="Resume Analyser API",
     description="Upload resumes, match against JD, get ranked candidates with HR questions"
 )
+app.include_router(jobs.router)
 
 app.add_middleware(
     CORSMiddleware,
