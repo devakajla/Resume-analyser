@@ -48,10 +48,48 @@ def extract_name(text):
         return line
     return None
 
+
+def _clean_skill_list(items):
+    """Filter out LLM preamble/junk and keep only real skill names."""
+    # phrases that signal the LLM wrote a sentence instead of a skill
+    junk_phrases = [
+        'here is', 'here are', 'the list', 'list of', 'technical skills',
+        'programming languages', 'frameworks', 'libraries', 'platforms',
+        'methodologies', 'technologies', 'mentioned in', 'the resume',
+        'tools', 'and technologies', 'following', 'skills:',
+    ]
+    cleaned = []
+    seen = set()
+    for raw in items:
+        s = raw.strip().strip("-").strip("•").strip("*").strip(".").strip()
+        # if item contains a colon, keep only the part after it (e.g. "resume: Python" -> "Python")
+        if ":" in s:
+            s = s.split(":")[-1].strip()
+        if not s:
+            continue
+        low = s.lower()
+        # drop empty, too-long, or sentence-like items
+        if len(s) > 40:
+            continue
+        # drop if it exactly matches or is a junk phrase
+        if low in junk_phrases:
+            continue
+        if any(low == p or low.startswith(p + " ") for p in junk_phrases):
+            continue
+        # drop multi-word items that look like sentences (4+ words)
+        if len(s.split()) >= 5:
+            continue
+        if low in seen:
+            continue
+        seen.add(low)
+        cleaned.append(s)
+    return cleaned
+
+
 def extract_skills(text):
     """Extract skills from a Skills section."""
     normalized = normalize_spaced_headers(text)
-    
+
     skills_section = re.search(
         r'(?i)(?:core\s*technical\s*skills|technical\s*skills|skills|technologies|tech stack|key skills|competencies)[:\s]*\n([\s\S]*?)(?=\n(?:internship|experience|education|project|certification|professional|$))',
         normalized
@@ -67,8 +105,9 @@ def extract_skills(text):
                 continue
             if len(line) < 50:
                 skills.append(line)
-        return skills
+        return _clean_skill_list(skills)
     return []
+
 
 def extract_education(text):
     normalized = normalize_spaced_headers(text)
@@ -95,11 +134,11 @@ def extract_experience(text):
 def extract_entities(text):
     normalized = normalize_spaced_headers(text)
     skills = extract_skills(text)
-    
+
     # LLM fallback if regex found no skills
     if not skills:
         skills = extract_skills_llm(text)
-    
+
     return {
         'name': extract_name(normalized),
         'email': extract_email(text),
@@ -109,33 +148,34 @@ def extract_entities(text):
         'experience': extract_experience(text),
     }
 
+
 from src.llm import call_llm
 
 
 def extract_skills_llm(text):
     raw = call_llm(
-        prompt=f"""Read this entire resume carefully and extract ALL technical skills, tools, programming languages, frameworks, libraries, platforms, methodologies, and technologies mentioned anywhere — in skills sections, experience descriptions, project descriptions, and education.
+        prompt=f"""Extract the technical skills from the resume below.
 
-Return ONLY a comma-separated list. No duplicates. No explanations.
+STRICT RULES:
+- Output ONLY the skill names, separated by commas.
+- Do NOT write any introduction, heading, sentence, or explanation.
+- Do NOT include words like "here is", "the list", "technical skills", "tools", "frameworks".
+- Each item must be a single skill name (e.g. Python, React, Docker, AWS).
+- No duplicates.
 
 Resume:
 {text[:4000]}
 
-All skills (comma-separated, no duplicates):""",
+Skills (comma-separated only):""",
         max_tokens=300,
         temperature=0.1
     )
 
     if raw:
-        skills = [s.strip().strip("-").strip("•").strip("*") for s in raw.split(",")]
-        skills = [s for s in skills if s and len(s) < 50]
-        seen = set()
-        unique = []
-        for s in skills:
-            if s.lower() not in seen:
-                seen.add(s.lower())
-                unique.append(s)
-        return unique
+        # strip a leading "Skills:" style prefix if the model added one
+        raw = re.sub(r'(?is)^.*?:\s*', '', raw, count=1) if ':' in raw.split(',')[0] else raw
+        items = raw.split(",")
+        return _clean_skill_list(items)
     return []
 
 
