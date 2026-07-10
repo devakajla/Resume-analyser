@@ -8,6 +8,7 @@ from src.scorer import score_resume
 from src.ats_scorer import calculate_ats_score
 import models
 import os
+from src.insights import extract_insights
 
 router = APIRouter(tags=["Applications"])
 
@@ -57,6 +58,9 @@ async def apply_to_job(
         # ATS score
         ats_result = calculate_ats_score(text, filepath, jd_skills=job.skills or [], entities=entities)
         ats_score = ats_result["total_score"]
+
+        # Career insights
+        insights = extract_insights(text)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Resume analysis failed: {str(e)}")
 
@@ -69,7 +73,7 @@ async def apply_to_job(
         entities=entities,
         ats_score=ats_score,
         compatibility_score=compatibility,
-        insights={},  # will fill in next phase
+        insights=insights,  # will fill in next phase
         current_stage="Applied"
     )
     db.add(application)
@@ -101,8 +105,6 @@ def job_applications(
     ).order_by(models.Application.compatibility_score.desc()).all()
 
     return {
-        "job_title": job.title,
-        "total_applicants": len(apps),
         "applicants": [{
             "application_id": a.id,
             "name": a.entities.get("name") if a.entities else None,
@@ -110,8 +112,10 @@ def job_applications(
             "ats_score": a.ats_score,
             "compatibility_score": a.compatibility_score,
             "current_stage": a.current_stage,
-            "skills": a.entities.get("skills", []) if a.entities else []
+            "skills": a.entities.get("skills", []) if a.entities else [],
+            "insights": a.insights   # ← add this
         } for a in apps]
+
     }
 
 

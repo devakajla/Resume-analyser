@@ -22,7 +22,6 @@ import models
 from auth import hash_password, verify_password, create_access_token, get_current_user
 from routers import jobs, applications
 
-
 Base.metadata.create_all(bind=engine)
 load_dotenv()
 app = FastAPI(
