@@ -79,11 +79,7 @@ async def apply_to_job(
     return {
         "message": "Application submitted successfully",
         "application_id": application.id,
-        "job_title": job.title,
-        "ats_score": ats_score,
-        "compatibility_score": compatibility,
-        "matched_skills": score_result.get("matched_skills", []),
-        "missing_skills": score_result.get("missing_skills", [])
+        "job_title": job.title
     }
 
 
@@ -133,6 +129,5 @@ def my_applications(
         "application_id": a.id,
         "job_title": a.job.title,
         "current_stage": a.current_stage,
-        "compatibility_score": a.compatibility_score,
         "applied_at": a.applied_at.isoformat() if a.applied_at else None
     } for a in apps]
