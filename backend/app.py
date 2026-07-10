@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from src.parser import parse_resume
@@ -20,6 +20,8 @@ from sqlalchemy.orm import Session
 from database import get_db, engine, Base
 import models
 from auth import hash_password, verify_password, create_access_token, get_current_user
+from routers import jobs, applications
+
 
 Base.metadata.create_all(bind=engine)
 load_dotenv()
@@ -28,6 +30,8 @@ app = FastAPI(
     description="Upload resumes, match against JD, get ranked candidates with HR questions"
 )
 app.include_router(jobs.router)
+app.include_router(jobs.router)
+app.include_router(applications.router)
 
 app.add_middleware(
     CORSMiddleware,
