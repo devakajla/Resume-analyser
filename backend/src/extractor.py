@@ -195,3 +195,4 @@ if __name__ == "__main__":
         print(f"Skills: {entities['skills']}")
         print(f"\nEducation:\n{entities['education']}")
         print(f"\nExperience:\n{entities['experience']}")
+

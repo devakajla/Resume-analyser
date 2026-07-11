@@ -15,8 +15,8 @@ class JobCreate(BaseModel):
     description: str
     salary_min: Optional[int] = None
     salary_max: Optional[int] = None
-    experience_required: Optional[str] = None
-    rounds: int = 1
+    experience_required: Optional[int] = None
+    rounds: int 
 
 
 def extract_jd_skills(jd_text: str):
