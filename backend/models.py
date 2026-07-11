@@ -46,6 +46,7 @@ class Application(Base):
     ats_score = Column(Integer)
     compatibility_score = Column(Float)
     insights = Column(JSON)
+    summary = Column(Text, nullable=True)
     current_stage = Column(String, default="Applied")
     applied_at = Column(DateTime, default=datetime.utcnow)
 

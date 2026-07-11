@@ -8,7 +8,7 @@ from src.scorer import score_resume
 from src.ats_scorer import calculate_ats_score
 import models
 import os
-from src.insights import extract_insights
+from src.insights import extract_insights, generate_summary
 from pydantic import BaseModel
 from models import User, Job, Application
 
@@ -61,9 +61,21 @@ async def apply_to_job(
         ats_result = calculate_ats_score(text, filepath, jd_skills=job.skills or [], entities=entities)
         ats_score = ats_result["total_score"]
 
-        # Career insights
+                # Career insights
         insights = extract_insights(text)
+
+        # Recruiter summary
+        summary = generate_summary(
+            resume_text=text,
+            job_title=job.title,
+            job_skills=job.skills or [],
+            ats_score=ats_score,
+            compatibility=compatibility,
+            matched_skills=score_result.get("matched_skills", []),
+            missing_skills=score_result.get("missing_skills", []),
+        )
     except Exception as e:
+
         raise HTTPException(status_code=500, detail=f"Resume analysis failed: {str(e)}")
 
     # Save application
@@ -76,6 +88,7 @@ async def apply_to_job(
         ats_score=ats_score,
         compatibility_score=compatibility,
         insights=insights,  # will fill in next phase
+        summary=summary,
         current_stage="Applied"
     )
     db.add(application)
@@ -115,7 +128,8 @@ def job_applications(
             "compatibility_score": a.compatibility_score,
             "current_stage": a.current_stage,
             "skills": a.entities.get("skills", []) if a.entities else [],
-            "insights": a.insights   # ← add this
+            "insights": a.insights,
+            "summary": a.summary
         } for a in apps]
 
     }
@@ -133,6 +147,7 @@ def my_applications(
 
     return [{
         "application_id": a.id,
+        "job_id": a.job_id,
         "job_title": a.job.title,
         "current_stage": a.current_stage,
         "applied_at": a.applied_at.isoformat() if a.applied_at else None
@@ -213,9 +228,9 @@ def job_pipeline(
             "ats_score": a.ats_score,
             "compatibility_score": a.compatibility_score,
             "insights": a.insights,
+            "summary": a.summary,
             "skills": a.entities.get("skills", []) if a.entities else []
         })
-
     return {
         "job_title": job.title,
         "stages": stages,
