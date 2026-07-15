@@ -15,6 +15,35 @@ class User(Base):
 
     jobs = relationship("Job", back_populates="hr")
     applications = relationship("Application", back_populates="candidate")
+    companies = relationship("Company", back_populates="creator")
+
+
+class Company(Base):
+    __tablename__ = "companies"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    industry = Column(String, nullable=True)
+    website = Column(String, nullable=True)
+    jd_template = Column(Text, nullable=True)
+    created_by = Column(Integer, ForeignKey("users.id"))
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    creator = relationship("User", back_populates="companies")
+    departments = relationship("Department", back_populates="company", cascade="all, delete-orphan")
+
+
+class Department(Base):
+    __tablename__ = "departments"
+    id = Column(Integer, primary_key=True, index=True)
+    company_id = Column(Integer, ForeignKey("companies.id"), nullable=False)
+    name = Column(String, nullable=False)
+    poc_name = Column(String, nullable=True)
+    poc_email = Column(String, nullable=True)
+    poc_phone = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    company = relationship("Company", back_populates="departments")
+    jobs = relationship("Job", back_populates="department")
 
 
 class Job(Base):
@@ -22,16 +51,19 @@ class Job(Base):
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String)
     description = Column(Text)
+    department_id = Column(Integer, ForeignKey("departments.id"), nullable=True)
     salary_min = Column(Integer)
     salary_max = Column(Integer)
     experience_required = Column(String)
     rounds = Column(Integer)
+    custom_stages = Column(JSON, nullable=True)
     skills = Column(JSON)
     status = Column(String, default="draft")
     hr_id = Column(Integer, ForeignKey("users.id"))
     created_at = Column(DateTime, default=datetime.utcnow)
 
     hr = relationship("User", back_populates="jobs")
+    department = relationship("Department", back_populates="jobs")
     applications = relationship("Application", back_populates="job")
 
 
