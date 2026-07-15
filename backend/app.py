@@ -1,45 +1,53 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import OAuth2PasswordRequestForm
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+from dotenv import load_dotenv
+
 from src.parser import parse_resume
 from src.extractor import extract_entities
 from src.scorer import score_resume
 from src.ats_scorer import calculate_ats_score
 from src.question_gen import generate_questions
 from src.config import MIN_SCORE_THRESHOLD
-from dotenv import load_dotenv
 from src.llm import call_llm
-from routers import jobs
-import requests
-import os
-import shutil
-import tempfile
-from fastapi import Depends
-from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy.orm import Session
+
 from database import get_db, engine, Base
 import models
 from auth import hash_password, verify_password, create_access_token, get_current_user
-from routers import jobs, applications
+from routers import jobs, applications, companies, departments
 
-Base.metadata.create_all(bind=engine)
+import os
+
 load_dotenv()
+Base.metadata.create_all(bind=engine)
+
 app = FastAPI(
     title="Resume Analyser API",
     description="Upload resumes, match against JD, get ranked candidates with HR questions"
 )
-app.include_router(jobs.router)
+
 app.include_router(jobs.router)
 app.include_router(applications.router)
+app.include_router(companies.router)
+app.include_router(departments.router)
+
+origins = [
+    "http://127.0.0.1:3000",
+    "http://localhost:3000"
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# In-memory storage
+# In-memory storage (legacy playground endpoints only — not used by the real DB-backed flow)
 parsed_resumes = {}
 current_jd = {"text": "", "skills": []}
 ranked_results = []
@@ -48,11 +56,74 @@ UPLOAD_DIR = "data/uploaded_resumes"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
-# ============ ENDPOINTS ============
+# ============ CORE ENDPOINTS ============
 
 @app.get("/")
 def home():
     return {"message": "Resume Analyser API is running", "docs": "/docs"}
+
+
+class SignupRequest(BaseModel):
+    name: str
+    email: str
+    password: str
+    role: str  # "hr" or "candidate"
+
+
+@app.post("/signup")
+def signup(data: SignupRequest, db: Session = Depends(get_db)):
+    existing = db.query(models.User).filter(models.User.email == data.email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    if data.role not in ("hr", "candidate"):
+        raise HTTPException(status_code=400, detail="Role must be 'hr' or 'candidate'")
+
+    user = models.User(
+        name=data.name,
+        email=data.email,
+        password=hash_password(data.password),
+        role=data.role
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    token = create_access_token({"user_id": user.id, "role": user.role})
+    return {
+        "token": token,
+        "user": {"id": user.id, "name": user.name, "email": user.email, "role": user.role}
+    }
+
+
+@app.post("/login")
+def login(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.email == form.username).first()
+    if not user or not verify_password(form.password, user.password):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    token = create_access_token({"user_id": user.id, "role": user.role})
+    return {
+        "token": token,
+        "user": {"id": user.id, "name": user.name, "email": user.email, "role": user.role}
+    }
+
+
+@app.get("/me")
+def get_me(current_user: models.User = Depends(get_current_user)):
+    return {
+        "id": current_user.id,
+        "name": current_user.name,
+        "email": current_user.email,
+        "role": current_user.role
+    }
+
+
+# ============ LEGACY / PLAYGROUND ENDPOINTS ============
+# These use in-memory storage and are NOT wired to the DB-backed job/application
+# flow. Kept for quick CLI-style testing of the parsing/scoring engine only.
+# Do not build the Next.js frontend against these — use /jobs, /companies,
+# and /jobs/{id}/apply etc. instead.
 
 @app.post("/upload-resumes")
 async def upload_resumes(files: list[UploadFile] = File(description="Upload resume files")):
@@ -90,6 +161,7 @@ async def upload_resumes(files: list[UploadFile] = File(description="Upload resu
         "errors": errors
     }
 
+
 @app.post("/set-jd")
 def set_jd(jd_text: str = Form(...)):
     global current_jd
@@ -107,8 +179,7 @@ Skills (comma-separated):""",
 
     skills = [s.strip().strip("-").strip("•") for s in raw.split(",")]
     skills = [s for s in skills if s and len(s) < 50]
-    
-    # Remove duplicates
+
     seen = set()
     unique_skills = []
     for s in skills:
@@ -122,6 +193,7 @@ Skills (comma-separated):""",
         "extracted_skills": unique_skills,
         "skill_count": len(unique_skills)
     }
+
 
 @app.post("/rank")
 def rank_resumes():
@@ -177,7 +249,6 @@ def generate_questions_for_resume(filename: str):
     if not current_jd["text"]:
         return JSONResponse(status_code=400, content={"error": "No JD set. Use /set-jd first."})
 
-    # Find the scored result for this resume
     resume_result = None
     for r in ranked_results:
         if r["file"] == filename:
@@ -213,6 +284,7 @@ def status():
         "results_available": len(ranked_results) > 0
     }
 
+
 @app.post("/ats-score/{filename}")
 def get_ats_score(filename: str):
     """Get ATS compatibility score for a resume."""
@@ -232,64 +304,3 @@ def get_ats_score(filename: str):
     result["candidate"] = data["entities"].get("name")
     result["file"] = filename
     return result
-
-
-from pydantic import BaseModel
-
-
-class SignupRequest(BaseModel):
-    name: str
-    email: str
-    password: str
-    role: str  # "hr" or "candidate"
-
-
-@app.post("/signup")
-def signup(data: SignupRequest, db: Session = Depends(get_db)):
-    # Check if email exists
-    existing = db.query(models.User).filter(models.User.email == data.email).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
-
-    if data.role not in ("hr", "candidate"):
-        raise HTTPException(status_code=400, detail="Role must be 'hr' or 'candidate'")
-
-    user = models.User(
-        name=data.name,
-        email=data.email,
-        password=hash_password(data.password),
-        role=data.role
-    )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-
-    token = create_access_token({"user_id": user.id, "role": user.role})
-    return {
-        "token": token,
-        "user": {"id": user.id, "name": user.name, "email": user.email, "role": user.role}
-    }
-
-
-@app.post("/login")
-def login(form: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    # form.username = email, form.password = password
-    user = db.query(models.User).filter(models.User.email == form.username).first()
-    if not user or not verify_password(form.password, user.password):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-
-    token = create_access_token({"user_id": user.id, "role": user.role})
-    return {
-        "token": token,
-        "user": {"id": user.id, "name": user.name, "email": user.email, "role": user.role}
-    }
-
-
-@app.get("/me")
-def get_me(current_user: models.User = Depends(get_current_user)):
-    return {
-        "id": current_user.id,
-        "name": current_user.name,
-        "email": current_user.email,
-        "role": current_user.role
-    }
