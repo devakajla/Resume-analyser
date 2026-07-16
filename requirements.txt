@@ -7,3 +7,6 @@ requests
 fastapi
 uvicorn
 streamlit
+pdfplumber
+spacy
+chromadb
