@@ -1,10 +1,53 @@
+# Python cache & build files
 __pycache__/
 *.pyc
-.env
+*.pyo
+*.pyd
+.pytest_cache/
+.cache/
+
+# Virtual Environments
 venv/
+env/
+.venv/
+
+# Environment configs & credentials
+.env
+.env.local
+backend/.env
+frontend/.env
+passfile.txt
+
+# OS metadata files
+.DS_Store
+Thumbs.db
+**/__pycache__/
+**/.DS_Store
+
+# Local uploaded assets (Candidate Resumes)
+backend/data/uploaded_resumes/
+data/uploaded_resumes/
 data/sample_resumes/*.pdf
 data/sample_resumes/*.docx
 data/sample_resumes/*.png
 data/sample_jds/*.txt
-passfile.txt
-backend/data/uploaded_resumes/
+
+# Local Databases & Vector Stores
+backend/data/chroma_db/
+*.db
+*.sqlite3
+
+# IDE / Editor configuration
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Frontend build & dependencies (safety net for root)
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+frontend/.tanstack/
