@@ -1,15 +1,18 @@
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
 from src.embedder import generate_embedding, calculate_similarity
 from src.extractor import extract_entities
 from src.llm import call_llm
 
+# Step 1: Supplementary (Nice-to-Have) list definition
+SUPPLEMENTARY_SET = {
+    "git", "github", "jira", "slack", "notion", "communication",
+    "agile", "scrum", "excel", "sheets", "teamwork", "leadership",
+    "trello", "confluence", "office", "word", "powerpoint", "interpersonal"
+}
 
-import sys
-import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from src.embedder import generate_embedding, calculate_similarity
-from src.extractor import extract_entities
-
-import requests
 
 def llm_match_score(resume_text, jd_text):
     clean_resume = ' '.join(resume_text.split())[:2000]
@@ -44,8 +47,8 @@ Reply with ONLY a number between 0.0 and 1.0:""",
     return 0.0
 
 
-def calculate_skill_match(resume_text, resume_skills, jd_skills):
-    """Match JD skills using both keyword search AND embedding similarity."""
+def calculate_skill_match(resume_text, resume_skills, jd_skills, experience_text=None):
+    """Match JD skills using keyword search, embedding similarity, core/supplementary weights, and experience-recency."""
     if not jd_skills:
         return 0.0, [], []
 
@@ -57,41 +60,125 @@ def calculate_skill_match(resume_text, resume_skills, jd_skills):
     # Get resume text embedding once
     resume_embedding = generate_embedding(resume_text)
 
+    # Step 1: Split Core vs Supplementary Skills
+    core_skills = []
+    supp_skills = []
+    for skill in jd_skills:
+        if skill.lower() in SUPPLEMENTARY_SET:
+            supp_skills.append(skill)
+        else:
+            core_skills.append(skill)
+
+    # Step 2: Experience details analysis for recency and duration
+    exp_lower = experience_text.lower() if experience_text else ""
+    # Assume top 40% of experience block contains the "Most Recent" job (due to reverse chronology)
+    recent_boundary = int(len(exp_lower) * 0.40)
+    recent_exp = exp_lower[:recent_boundary]
+
+    total_weighted_points = 0.0
+    max_possible_points = 0.0
+    core_matched_count = 0
+
     for skill in jd_skills:
         skill_lower = skill.lower()
+        is_core = skill not in supp_skills
 
-        # Method 1: Exact keyword match in text
+        # Match check methods
         found_keyword = skill_lower in resume_lower
-
-        # Method 2: Exact match in extracted skills
         found_in_skills = any(skill_lower in rs or rs in skill_lower for rs in resume_skills_lower)
 
-        # Method 3: Embedding similarity (semantic match)
         skill_embedding = generate_embedding(skill)
         similarity = float(calculate_similarity(skill_embedding, resume_embedding))
-        found_semantic = similarity > 0.45  # threshold for "related enough"
+        found_semantic = similarity > 0.45
+
+        # Core vs Supplementary base weights
+        base_weight = 1.0 if is_core else 0.3
+        max_possible_points += base_weight
 
         if found_keyword or found_in_skills or found_semantic:
             matched.append(skill)
+            if is_core:
+                core_matched_count += 1
+
+            # Recency Weighting multiplier:
+            # - Found in recent experience (top 40%): 1.2x weight
+            # - Found in older experience (bottom 60%): 1.0x weight
+            # - Only listed in skills list (academic/unused): 0.6x weight
+            if exp_lower:
+                if skill_lower in recent_exp:
+                    multiplier = 1.2
+                elif skill_lower in exp_lower:
+                    multiplier = 1.0
+                else:
+                    multiplier = 0.6
+            else:
+                multiplier = 0.8  # Fallback for freshers (no experience text)
+
+            total_weighted_points += base_weight * multiplier
         else:
             missing.append(skill)
 
-    score = len(matched) / len(jd_skills)
-    return score, matched, missing
+    # Calculate final skill ratio
+    if max_possible_points > 0:
+        skill_score = total_weighted_points / max_possible_points
+    else:
+        skill_score = 0.0
+
+    # Step 1 logic: Must-Have Core Penalty
+    # If candidate misses > 50% of the Core skills, penalize final skill score by 50%
+    if core_skills:
+        core_match_ratio = core_matched_count / len(core_skills)
+        if core_match_ratio < 0.5:
+            skill_score *= 0.5
+
+    return min(skill_score, 1.0), matched, missing
 
 
 def score_resume(resume_text, jd_text, jd_skills):
-    resume_emb = generate_embedding(resume_text)
-    jd_emb = generate_embedding(jd_text)
-    embedding_score = float(calculate_similarity(resume_emb, jd_emb))
-
+    # Extract structural parts of the candidate profile
     entities = extract_entities(resume_text)
     resume_skills = entities.get('skills', [])
-    skill_score, matched, missing = calculate_skill_match(resume_text, resume_skills, jd_skills)
+    exp_text = entities.get('experience', '')
+    edu_text = entities.get('education', '')
 
+    # Step 3: Section-Based Semantic Matching
+    # Generate JD embedding once
+    jd_emb = generate_embedding(jd_text)
+
+    # 1. Overall Similarity (40% weight)
+    resume_emb = generate_embedding(resume_text)
+    overall_similarity = float(calculate_similarity(resume_emb, jd_emb))
+
+    # 2. Experience Section Similarity (50% weight)
+    if exp_text and len(exp_text.strip()) > 50:
+        exp_emb = generate_embedding(exp_text)
+        exp_similarity = float(calculate_similarity(exp_emb, jd_emb))
+    else:
+        exp_similarity = overall_similarity  # Fallback
+
+    # 3. Education Section Similarity (10% weight)
+    if edu_text and len(edu_text.strip()) > 20:
+        edu_emb = generate_embedding(edu_text)
+        edu_similarity = float(calculate_similarity(edu_emb, jd_emb))
+    else:
+        edu_similarity = overall_similarity  # Fallback
+
+    # Blend semantic matching vectors
+    embedding_score = (0.40 * overall_similarity) + (0.50 * exp_similarity) + (0.10 * edu_similarity)
+
+    # Calculate skill score using MUST-HAVEs and Recency rules
+    skill_score, matched, missing = calculate_skill_match(
+        resume_text=resume_text,
+        resume_skills=resume_skills,
+        jd_skills=jd_skills,
+        experience_text=exp_text
+    )
+
+    # Recruiter verification LLM score
     llm_score = llm_match_score(resume_text, jd_text)
     print(f"    LLM scored {entities.get('name', '?')}: {llm_score}")
 
+    # Dynamic Weighting depending on JDs complexity scale
     if len(jd_skills) > 20:
         final_score = (0.30 * embedding_score) + (0.20 * skill_score) + (0.50 * llm_score)
     else:
@@ -113,12 +200,12 @@ def score_resume(resume_text, jd_text, jd_skills):
 # Quick test
 if __name__ == "__main__":
     jd_text = "Looking for a Python developer with experience in machine learning, FastAPI, and SQL databases."
-    jd_skills = ["Python", "Machine Learning", "FastAPI", "SQL"]
+    jd_skills = ["Python", "Machine Learning", "FastAPI", "SQL", "Git", "Communication"]
 
     resumes = {
-        "dev.pdf": "John Doe. Python developer with 3 years in machine learning, deep learning, FastAPI, PostgreSQL, SQL.",
+        "dev.pdf": "John Doe. Python developer with 3 years in machine learning, deep learning, FastAPI, PostgreSQL, SQL. Worked on these recently.",
         "frontend.pdf": "Jane Smith. Frontend developer skilled in React, JavaScript, HTML, CSS.",
-        "data.pdf": "Bob Wilson. Data scientist with Python, scikit-learn, pandas, SQL, machine learning.",
+        "data.pdf": "Bob Wilson. Data scientist with Python, scikit-learn, pandas, SQL, machine learning. Has Git listed but no recent experience in work history.",
     }
 
     print("Detailed Scoring:")
