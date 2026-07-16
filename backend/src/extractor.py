@@ -1,4 +1,11 @@
 import re
+import spacy
+
+try:
+    nlp = spacy.load("en_core_web_lg")
+except OSError:
+    nlp = None
+
 
 def normalize_spaced_headers(text):
     """Fix spaced-out headers like 'S K I L L S' → 'SKILLS'"""
@@ -20,7 +27,8 @@ def extract_phone(text):
 
 
 def extract_name(text):
-    """Extract name — skip headers, contact info, and company lines."""
+    """Extract name using reliable rules first, then fallback to spaCy NER."""
+    # 1. Rule-Based Check (Header lines filter - Highly reliable for resume tops)
     section_headers = {
         'experience', 'education', 'skills', 'projects', 'summary',
         'objective', 'certifications', 'achievements', 'contact',
@@ -29,29 +37,39 @@ def extract_name(text):
     lines = [line.strip() for line in text.split('\n') if line.strip()]
     for line in lines:
         lower = line.lower()
-        # Skip section headers
         if lower in section_headers:
             continue
-        # Skip contact info lines
         if '@' in line or 'phone' in lower:
             continue
-        # Skip company/location lines (contain |)
-        if '|' in line:
+        # Name should not contain layout pipes '|' or slashes '/' (skips location strings)
+        if '|' in line or '/' in line:
             continue
-        # Skip job descriptions (too long to be a name)
+        # Name should not contain any numbers/digits
+        if any(char.isdigit() for char in line):
+            continue
         if len(line) > 40:
             continue
-        # Skip lines that start with action verbs (job descriptions)
         action_words = ['enter', 'show', 'use', 'list', 'manage', 'develop', 'create', 'led', 'built']
         if any(lower.startswith(w) for w in action_words):
             continue
+        
+        # If we find a clean line at the top, it is 99% the candidate's name!
         return line
+
+    # 2. Fallback to spaCy NER if rules found nothing
+    if nlp:
+        doc = nlp(text[:500])
+        for ent in doc.ents:
+            if ent.label_ == "PERSON":
+                name = ent.text.strip().replace("\n", " ")
+                # Extra checks to avoid location/layout junk leaks
+                if 1 < len(name.split()) <= 4 and '/' not in name and '|' not in name:
+                    return name
     return None
 
 
 def _clean_skill_list(items):
     """Filter out LLM preamble/junk and keep only real skill names."""
-    # phrases that signal the LLM wrote a sentence instead of a skill
     junk_phrases = [
         'here is', 'here are', 'the list', 'list of', 'technical skills',
         'programming languages', 'frameworks', 'libraries', 'platforms',
@@ -62,21 +80,17 @@ def _clean_skill_list(items):
     seen = set()
     for raw in items:
         s = raw.strip().strip("-").strip("•").strip("*").strip(".").strip()
-        # if item contains a colon, keep only the part after it (e.g. "resume: Python" -> "Python")
         if ":" in s:
             s = s.split(":")[-1].strip()
         if not s:
             continue
         low = s.lower()
-        # drop empty, too-long, or sentence-like items
         if len(s) > 40:
             continue
-        # drop if it exactly matches or is a junk phrase
         if low in junk_phrases:
             continue
         if any(low == p or low.startswith(p + " ") for p in junk_phrases):
             continue
-        # drop multi-word items that look like sentences (4+ words)
         if len(s.split()) >= 5:
             continue
         if low in seen:
@@ -97,7 +111,6 @@ def extract_skills(text):
     if skills_section:
         raw = skills_section.group(1)
         lines = [line.strip() for line in raw.split('\n') if line.strip()]
-        # Filter out category headers and keep actual skills
         category_words = ['testing expertise', 'automation &', 'tools &', 'automation and', 'tools and']
         skills = []
         for line in lines:
@@ -135,7 +148,6 @@ def extract_entities(text):
     normalized = normalize_spaced_headers(text)
     skills = extract_skills(text)
 
-    # LLM fallback if regex found no skills
     if not skills:
         skills = extract_skills_llm(text)
 
@@ -172,11 +184,38 @@ Skills (comma-separated only):""",
     )
 
     if raw:
-        # strip a leading "Skills:" style prefix if the model added one
         raw = re.sub(r'(?is)^.*?:\s*', '', raw, count=1) if ':' in raw.split(',')[0] else raw
         items = raw.split(",")
         return _clean_skill_list(items)
     return []
+
+
+def is_valid_resume(text):
+    """Validate if the extracted text belongs to a real resume with min 200 words."""
+    # 1. Minimum Word count check (Strictly 200 words minimum)
+    words = text.split()
+    if len(words) < 200:
+        return False, f"Invalid length (Document has only {len(words)} words. A valid resume must contain at least 200 words)"
+
+    # 2. Contact details check (Must have email or phone)
+    email = extract_email(text)
+    phone = extract_phone(text)
+    if not email and not phone:
+        return False, "Missing contact details (No Email or Phone number found)"
+
+    # 3. Resume Sections check (Must contain at least 2 standard section terms)
+    resume_keywords = [
+        'experience', 'education', 'skills', 'projects', 'summary',
+        'objective', 'certifications', 'achievements', 'employment',
+        'work history', 'technical skills', 'professional experience'
+    ]
+    text_lower = text.lower()
+    matched_sections = sum(1 for kw in resume_keywords if kw in text_lower)
+    
+    if matched_sections < 2:
+        return False, "Not a resume format (Standard sections like Experience, Education, or Skills are missing)"
+
+    return True, "Valid resume"
 
 
 # Quick test
@@ -195,4 +234,3 @@ if __name__ == "__main__":
         print(f"Skills: {entities['skills']}")
         print(f"\nEducation:\n{entities['education']}")
         print(f"\nExperience:\n{entities['experience']}")
-

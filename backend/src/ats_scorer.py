@@ -1,7 +1,12 @@
 import re
 from src.extractor import extract_entities
-
 import fitz
+import spacy
+
+try:
+    nlp = spacy.load("en_core_web_lg")
+except OSError:
+    nlp = None
 
 
 def check_ats_readability(file_path):
@@ -173,16 +178,36 @@ def check_bullet_points(text):
 
 
 def check_action_verbs(text):
-    action_verbs = [
-        'led', 'built', 'developed', 'designed', 'implemented', 'managed',
-        'created', 'improved', 'increased', 'reduced', 'achieved', 'delivered',
-        'launched', 'optimized', 'automated', 'analyzed', 'coordinated',
-        'established', 'executed', 'generated', 'resolved', 'streamlined',
-        'collaborated', 'spearheaded', 'architected', 'mentored', 'deployed'
-    ]
-    text_lower = text.lower()
-    found = [v for v in action_verbs if v in text_lower]
-    unique_verbs = len(set(found))
+    # Roots (Base forms) of action verbs
+    action_roots = {
+        'lead', 'build', 'develop', 'design', 'implement', 'manage',
+        'create', 'improve', 'increase', 'reduce', 'achieve', 'deliver',
+        'launch', 'optimize', 'automate', 'analyze', 'coordinate',
+        'establish', 'execute', 'generate', 'resolve', 'streamline',
+        'collaborate', 'spearhead', 'architect', 'mentor', 'deploy'
+    }
+    
+    if nlp:
+        doc = nlp(text.lower())
+        found = set()
+        for token in doc:
+            # Word should be classified as a Verb and its base form (lemma) in action_roots
+            if token.pos_ in ("VERB", "AUX") and token.lemma_ in action_roots:
+                found.add(token.lemma_)
+        unique_verbs = len(found)
+    else:
+        # Safe fallback if spaCy is not available
+        action_verbs = [
+            'led', 'built', 'developed', 'designed', 'implemented', 'managed',
+            'created', 'improved', 'increased', 'reduced', 'achieved', 'delivered',
+            'launched', 'optimized', 'automated', 'analyzed', 'coordinated',
+            'established', 'executed', 'generated', 'resolved', 'streamlined',
+            'collaborated', 'spearheaded', 'architected', 'mentored', 'deployed'
+        ]
+        text_lower = text.lower()
+        found = [v for v in action_verbs if v in text_lower]
+        unique_verbs = len(set(found))
+
     if unique_verbs >= 8:
         return 8, [f"{unique_verbs} unique action verbs — strong"]
     elif unique_verbs >= 5:

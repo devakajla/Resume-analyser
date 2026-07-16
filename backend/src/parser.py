@@ -3,6 +3,12 @@ from docx import Document
 import easyocr
 import os
 
+try:
+    import pdfplumber
+    pdfplumber_available = True
+except ImportError:
+    pdfplumber_available = False
+
 
 reader = easyocr.Reader(['en'], gpu=False)
 
@@ -16,6 +22,24 @@ def detect_format(file_path):
 
 
 def extract_from_pdf(file_path):
+    # 1. Try to use pdfplumber for layout & table extraction first
+    if pdfplumber_available:
+        try:
+            text = ""
+            with pdfplumber.open(file_path) as pdf:
+                for page in pdf.pages:
+                    # extract_text maintains horizontal alignment of tables/columns
+                    page_text = page.extract_text()
+                    if page_text:
+                        text += page_text + "\n"
+            
+            # If pdfplumber successfully extracted text and it's not a scanned PDF
+            if len(text.strip()) >= 50:
+                return text
+        except Exception:
+            pass  # Fallback to PyMuPDF if pdfplumber fails
+
+    # 2. Fallback: PyMuPDF for standard digital PDFs
     try:
         doc = fitz.open(file_path)
     except Exception:
@@ -26,7 +50,7 @@ def extract_from_pdf(file_path):
         page_text = page.get_text()
         text += page_text
 
-    # If text is too short, it's a scanned PDF — OCR each page as image
+    # 3. Fallback: OCR for scanned PDFs (no text layer)
     if len(text.strip()) < 50:
         text = ""
         for page in doc:
