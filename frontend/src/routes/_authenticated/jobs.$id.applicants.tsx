@@ -2,7 +2,7 @@ import { createFileRoute, Link, redirect } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { ArrowLeft, ArrowUpDown, FileText, ArrowRightLeft } from "lucide-react";
+import { ArrowLeft, ArrowUpDown, FileText, ArrowRightLeft, LayoutGrid, List, Search } from "lucide-react";
 import { api, getRoleRedirect, getToken, getApiBase } from "@/lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -11,6 +11,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Input } from "@/components/ui/input";
 
 type Applicant = {
   application_id: string;
@@ -27,6 +28,7 @@ type Applicant = {
     questions?: string;
   };
   summary?: string;
+  isSuggestion?: boolean;
 };
 
 type Pipeline = {
@@ -68,9 +70,27 @@ function JobApplicantsPage() {
     queryFn: () => api<JobDetail>(`/jobs/${id}`),
   });
 
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchParam, setSearchParam] = useState("");
+  const [hasSearched, setHasSearched] = useState(false);
+
+  const { data: suggestionsData, isFetching: searching } = useQuery({
+    queryKey: ["job", id, "suggestions", searchParam],
+    queryFn: () => api<{ suggestions: any[] }>(`/jobs/${id}/db-suggestions?q=${encodeURIComponent(searchParam)}`),
+    enabled: hasSearched && !!searchParam,
+  });
+
   const [selected, setSelected] = useState<Applicant | null>(null);
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [newStage, setNewStage] = useState<string>("");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+
+  const { data: tailoredData, isLoading: loadingTailored } = useQuery({
+    queryKey: ["tailored-insights", selected?.application_id, id],
+    queryFn: () => api<{ summary: string; questions: string; skills: string[] }>(
+      `/applications/${selected?.application_id}/job/${id}/tailored-insights`
+    ),
+    enabled: !!selected && !!selected.isSuggestion,
+  });
   const [selectedCompareIds, setSelectedCompareIds] = useState<string[]>([]);
   const [compareOpen, setCompareOpen] = useState(false);
 
@@ -103,11 +123,11 @@ function JobApplicantsPage() {
   const moveStage = useMutation({
     mutationFn: ({ appId, stage }: { appId: string; stage: string }) =>
       api(`/applications/${appId}/stage`, { method: "PATCH", body: { stage } }),
-    onSuccess: () => {
+    onSuccess: (data, vars) => {
       qc.invalidateQueries({ queryKey: ["job", id, "applications"] });
       qc.invalidateQueries({ queryKey: ["job", id, "pipeline"] });
       toast.success("Stage updated");
-      setSelected(null);
+      setSelected((prev) => (prev && prev.application_id === vars.appId ? null : prev));
     },
     onError: (e: any) => toast.error(e.message || "Failed"),
   });
@@ -129,13 +149,20 @@ function JobApplicantsPage() {
             {applicants.length} applicants
           </p>
         </div>
-        <Link
-          to="/jobs/$id/pipeline"
-          params={{ id }}
-          className="text-sm text-primary hover:underline"
-        >
-          Open pipeline →
-        </Link>
+        <div className="flex items-center border border-border rounded-lg p-1 bg-secondary/40 shrink-0">
+          <Link
+            to="/jobs/$id/pipeline"
+            params={{ id }}
+            className="px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5 text-muted-foreground hover:text-foreground"
+          >
+            <LayoutGrid className="h-3.5 w-3.5" />
+            Board
+          </Link>
+          <div className="px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5 bg-card text-foreground shadow-sm border border-border/10 select-none">
+            <List className="h-3.5 w-3.5" />
+            List
+          </div>
+        </div>
       </div>
 
       <div className="app-panel overflow-hidden rounded-lg">
@@ -190,10 +217,25 @@ function JobApplicantsPage() {
                     <td className="px-6 py-3 text-foreground font-medium">{a.name}</td>
                     <td className="px-6 py-3"><ScoreBadge score={a.ats_score} /></td>
                     <td className="px-6 py-3"><MatchBadge value={a.compatibility_score} /></td>
-                    <td className="px-6 py-3">
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-secondary text-muted-foreground">
-                        {a.current_stage}
-                      </span>
+                    <td className="px-6 py-3" onClick={(e) => e.stopPropagation()}>
+                      <Select
+                        value={a.current_stage}
+                        onValueChange={(val) => {
+                          moveStage.mutate({ appId: a.application_id, stage: val });
+                        }}
+                        disabled={moveStage.isPending}
+                      >
+                        <SelectTrigger className="w-[130px] h-8 bg-secondary/80 border-border/50 text-xs font-medium">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent className="bg-card border-border">
+                          {(pipeline?.stages ?? [a.current_stage]).map((stg) => (
+                            <SelectItem key={stg} value={stg}>
+                              {stg}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </td>
                   </tr>
                 );
@@ -201,6 +243,122 @@ function JobApplicantsPage() {
             </tbody>
           </table>
         )}
+      </div>
+
+      {/* Dynamic Talent Pool Search (Vector Match) */}
+      <div className="space-y-4 mt-8 pt-6 border-t border-border">
+        <div>
+          <h2 className="text-lg font-semibold text-foreground font-display">Talent Pool Search</h2>
+          <p className="text-xs text-muted-foreground mt-1">
+            Search your entire repository of candidates using natural language (powered by Pinecone vector index).
+          </p>
+        </div>
+
+        {/* The Search Bar (Rounded & Long) */}
+        <div className="flex gap-2 max-w-2xl">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Type skills or profile requirements (e.g. React Developer with SQL)..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && searchQuery.trim()) {
+                  setSearchParam(searchQuery.trim());
+                  setHasSearched(true);
+                }
+              }}
+              className="pl-9 rounded-full bg-secondary/30 border-border/80 text-sm h-9"
+            />
+          </div>
+          <Button
+            onClick={() => {
+              if (searchQuery.trim()) {
+                setSearchParam(searchQuery.trim());
+                setHasSearched(true);
+              }
+            }}
+            disabled={searching || !searchQuery.trim()}
+            className="rounded-full h-9 text-xs font-semibold px-5"
+          >
+            {searching ? "Searching..." : "Search Pool"}
+          </Button>
+        </div>
+
+        {/* Quick Prompts (Tags list) */}
+        <div className="flex flex-wrap gap-2 items-center text-xs">
+          <span className="text-muted-foreground font-medium mr-1">Quick Prompts:</span>
+          {["Python & ML", "React Frontend", "QA Automation", "Business Analyst", "Finance Specialist"].map((p) => (
+            <button
+              key={p}
+              onClick={() => {
+                setSearchQuery(p);
+                setSearchParam(p);
+                setHasSearched(true);
+              }}
+              className="px-3 py-1 rounded-full border border-border bg-secondary/20 hover:bg-secondary text-muted-foreground hover:text-foreground transition-all font-medium"
+            >
+              {p}
+            </button>
+          ))}
+        </div>
+
+        {/* Search Results Display */}
+        {searching ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+            {Array.from({ length: 2 }).map((_, i) => (
+              <Skeleton key={i} className="h-32 rounded-xl" />
+            ))}
+          </div>
+        ) : hasSearched ? (
+          suggestionsData?.suggestions && suggestionsData.suggestions.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+              {suggestionsData.suggestions.map((s, idx) => (
+                <div
+                  key={s.application_id}
+                  onClick={() => {
+                    setSelected({
+                      application_id: s.application_id,
+                      name: s.name,
+                      email: s.email,
+                      ats_score: s.ats_score,
+                      compatibility_score: s.compatibility_score,
+                      current_stage: s.current_stage,
+                      skills: s.skills,
+                      summary: s.summary,
+                      insights: s.insights,
+                      isSuggestion: true
+                    });
+                    setNewStage(s.current_stage);
+                  }}
+                  className="app-panel p-4 rounded-lg cursor-pointer flex items-center justify-between hover:bg-secondary/40 hover:border-primary/30 border border-border/80 transition-all shadow-sm select-none"
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-muted-foreground bg-secondary px-1.5 py-0.5 rounded-full shrink-0">
+                        #{idx + 1}
+                      </span>
+                      <span className="font-semibold text-foreground text-sm truncate">{s.name}</span>
+                    </div>
+                    <div className="text-xs text-muted-foreground mt-1 truncate">{s.email}</div>
+                    <div className="text-[10px] font-medium text-muted-foreground mt-2 inline-flex items-center px-2 py-0.5 rounded-md bg-secondary/80">
+                      Original Job: {s.original_job_title}
+                    </div>
+                  </div>
+                  <div className="flex flex-col items-end gap-1.5 shrink-0 ml-4">
+                    <div className="text-[10px] text-primary font-medium flex items-center gap-0.5">
+                      View Profile →
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="app-panel border-dashed rounded-lg p-6 text-center text-xs text-muted-foreground mt-4">
+              No matching candidates found in the talent pool for "{searchParam}".
+            </div>
+          )
+        ) : null}
       </div>
 
       <Sheet open={!!selected} onOpenChange={(o) => !o && setSelected(null)}>
@@ -239,24 +397,63 @@ function JobApplicantsPage() {
                 </TabsList>
 
                 <TabsContent value="insights" className="space-y-6 mt-4">
-                  {selected.summary && (
-                    <div>
-                      <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Summary</div>
-                      <p className="mt-2 text-sm text-foreground leading-relaxed">{selected.summary}</p>
-                    </div>
-                  )}
-
-                  {selected.skills && selected.skills.length > 0 && (
-                    <div>
-                      <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Skills</div>
-                      <div className="mt-2 flex flex-wrap gap-1.5">
-                        {selected.skills.map((s) => (
-                          <span key={s} className="text-xs px-2 py-1 rounded-md bg-secondary text-foreground">
-                            {s}
-                          </span>
-                        ))}
+                  {selected.isSuggestion ? (
+                    loadingTailored ? (
+                      <div className="space-y-4">
+                        <div className="space-y-2">
+                          <Skeleton className="h-4 w-20" />
+                          <Skeleton className="h-20 w-full" />
+                        </div>
+                        <div className="space-y-2">
+                          <Skeleton className="h-4 w-20" />
+                          <Skeleton className="h-10 w-full" />
+                        </div>
                       </div>
-                    </div>
+                    ) : (
+                      <>
+                        {tailoredData?.summary && (
+                          <div>
+                            <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Tailored AI Summary</div>
+                            <p className="mt-2 text-sm text-foreground leading-relaxed">{tailoredData.summary}</p>
+                          </div>
+                        )}
+
+                        {tailoredData?.skills && tailoredData.skills.length > 0 && (
+                          <div>
+                            <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Skills</div>
+                            <div className="mt-2 flex flex-wrap gap-1.5">
+                              {tailoredData.skills.map((s) => (
+                                <span key={s} className="text-xs px-2 py-1 rounded-md bg-secondary text-foreground">
+                                  {s}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )
+                  ) : (
+                    <>
+                      {selected.summary && (
+                        <div>
+                          <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Summary</div>
+                          <p className="mt-2 text-sm text-foreground leading-relaxed">{selected.summary}</p>
+                        </div>
+                      )}
+
+                      {selected.skills && selected.skills.length > 0 && (
+                        <div>
+                          <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Skills</div>
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {selected.skills.map((s) => (
+                              <span key={s} className="text-xs px-2 py-1 rounded-md bg-secondary text-foreground">
+                                {s}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </>
                   )}
 
                   {selected.insights && (
@@ -291,37 +488,64 @@ function JobApplicantsPage() {
                 </TabsContent>
 
                 <TabsContent value="questions" className="space-y-6 mt-4">
-                  <div>
-                    <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">AI Screening Questions</div>
-                    <div className="mt-2 text-sm text-foreground leading-relaxed whitespace-pre-wrap bg-secondary/40 rounded-lg p-4 border border-border/50 font-sans">
-                      {selected.insights?.questions || "No screening questions available for this candidate."}
+                  {selected.isSuggestion ? (
+                    loadingTailored ? (
+                      <div className="space-y-2">
+                        <Skeleton className="h-4 w-32" />
+                        <Skeleton className="h-32 w-full" />
+                      </div>
+                    ) : (
+                      <div>
+                        <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Tailored AI Screening Questions</div>
+                        <div className="mt-2 text-sm text-foreground leading-relaxed whitespace-pre-wrap bg-secondary/40 rounded-lg p-4 border border-border/50 font-sans">
+                          {tailoredData?.questions || "No tailored screening questions available for this candidate."}
+                        </div>
+                      </div>
+                    )
+                  ) : (
+                    <div>
+                      <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">AI Screening Questions</div>
+                      <div className="mt-2 text-sm text-foreground leading-relaxed whitespace-pre-wrap bg-secondary/40 rounded-lg p-4 border border-border/50 font-sans">
+                        {selected.insights?.questions || "No screening questions available for this candidate."}
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </TabsContent>
               </Tabs>
 
-              <div className="mt-8 pt-6 border-t border-border">
-                <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">Move stage</div>
-                <div className="flex gap-2">
-                  <Select value={newStage} onValueChange={setNewStage}>
-                    <SelectTrigger className="flex-1"><SelectValue placeholder="Select stage" /></SelectTrigger>
-                    <SelectContent>
-                      {(pipeline?.stages ?? [selected.current_stage]).map((s) => (
-                        <SelectItem key={s} value={s}>{s}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Button
-                    onClick={() => {
-                      if (!newStage || newStage === selected.current_stage) return;
-                      moveStage.mutate({ appId: selected.application_id, stage: newStage });
-                    }}
-                    disabled={moveStage.isPending}
-                  >
-                    Move
-                  </Button>
+              {selected.isSuggestion ? (
+                <div className="mt-8 pt-6 border-t border-border">
+                  <div className="rounded-xl bg-primary/[0.04] border border-primary/20 p-4 flex flex-col items-center text-center gap-2">
+                    <span className="text-xs font-semibold text-primary uppercase tracking-wider">Suggested from Talent Pool</span>
+                    <p className="text-xs text-muted-foreground leading-relaxed">
+                      This candidate originally applied to another role and is not currently in the active hiring pipeline of this job.
+                    </p>
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <div className="mt-8 pt-6 border-t border-border">
+                  <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">Move stage</div>
+                  <div className="flex gap-2">
+                    <Select value={newStage} onValueChange={setNewStage}>
+                      <SelectTrigger className="flex-1"><SelectValue placeholder="Select stage" /></SelectTrigger>
+                      <SelectContent>
+                        {(pipeline?.stages ?? [selected.current_stage]).map((s) => (
+                          <SelectItem key={s} value={s}>{s}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      onClick={() => {
+                        if (!newStage || newStage === selected.current_stage) return;
+                        moveStage.mutate({ appId: selected.application_id, stage: newStage });
+                      }}
+                      disabled={moveStage.isPending}
+                    >
+                      Move
+                    </Button>
+                  </div>
+                </div>
+              )}
             </>
           )}
         </SheetContent>

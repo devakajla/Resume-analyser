@@ -290,28 +290,18 @@ function JobPipelinePage() {
           </div>
           <div className="flex items-center gap-3">
             <div className="flex items-center border border-border rounded-lg p-1 bg-secondary/40 shrink-0">
-              <button
-                onClick={() => setViewMode("board")}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5 ${
-                  viewMode === "board"
-                    ? "bg-card text-foreground shadow-sm border border-border/10"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
+              <div className="px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5 bg-card text-foreground shadow-sm border border-border/10 select-none">
                 <LayoutGrid className="h-3.5 w-3.5" />
                 Board
-              </button>
-              <button
-                onClick={() => setViewMode("list")}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5 ${
-                  viewMode === "list"
-                    ? "bg-card text-foreground shadow-sm border border-border/10"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
+              </div>
+              <Link
+                to="/jobs/$id/applicants"
+                params={{ id }}
+                className="px-3 py-1.5 text-xs font-medium rounded-md transition-all flex items-center gap-1.5 text-muted-foreground hover:text-foreground"
               >
                 <List className="h-3.5 w-3.5" />
                 List
-              </button>
+              </Link>
             </div>
             {jobMeta?.status === "draft" && (
               <Button onClick={() => makeLive.mutate()} disabled={makeLive.isPending}>
