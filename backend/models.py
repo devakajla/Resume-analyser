@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, Float, DateTime, ForeignKey, JSON
+from sqlalchemy import Column, Integer, String, Text, Float, DateTime, ForeignKey, JSON, LargeBinary
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
@@ -73,6 +73,7 @@ class Application(Base):
     job_id = Column(Integer, ForeignKey("jobs.id"))
     candidate_id = Column(Integer, ForeignKey("users.id"))
     resume_path = Column(String)
+    resume_bytes = Column(LargeBinary, nullable=True) # Binary representation in Postgres
     resume_text = Column(Text)
     entities = Column(JSON)
     ats_score = Column(Integer)
