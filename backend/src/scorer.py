@@ -134,7 +134,7 @@ def calculate_skill_match(resume_text, resume_skills, jd_skills, experience_text
     return min(skill_score, 1.0), matched, missing
 
 
-def score_resume(resume_text, jd_text, jd_skills):
+def score_resume(resume_text, jd_text, jd_skills, use_llm: bool = True):
     # Extract structural parts of the candidate profile
     entities = extract_entities(resume_text)
     resume_skills = entities.get('skills', [])
@@ -175,8 +175,11 @@ def score_resume(resume_text, jd_text, jd_skills):
     )
 
     # Recruiter verification LLM score
-    llm_score = llm_match_score(resume_text, jd_text)
-    print(f"    LLM scored {entities.get('name', '?')}: {llm_score}")
+    if use_llm:
+        llm_score = llm_match_score(resume_text, jd_text)
+        print(f"    LLM scored {entities.get('name', '?')}: {llm_score}")
+    else:
+        llm_score = embedding_score
 
     # Dynamic Weighting depending on JDs complexity scale
     if len(jd_skills) > 20:

@@ -536,8 +536,8 @@ def get_job_db_suggestions(
             continue  # Already applied here, skip suggestion
 
         # Recalculate JD Match Score (compatibility_score) dynamically against the current job!
-        target_score = score_resume(a.resume_text, job.description, job.skills or [])
-        comp_score = target_score.get("compatibility_score", 0.0)
+        target_score = score_resume(a.resume_text, job.description, job.skills or [], use_llm=False)
+        comp_score = target_score.get("final_score", 0.0) # score_resume returns 'final_score' as the blended rating
 
         suggestions.append({
             "application_id": str(a.id),
@@ -553,6 +553,10 @@ def get_job_db_suggestions(
     return {"suggestions": suggestions}
 
 
+# In-memory cache for tailored candidate insights (composite key format: "appId_jobId")
+TAILORED_INSIGHTS_CACHE = {}
+
+
 @router.get("/applications/{app_id}/job/{job_id}/tailored-insights")
 def get_application_tailored_insights(
     app_id: int,
@@ -561,6 +565,12 @@ def get_application_tailored_insights(
     current_user: models.User = Depends(require_role("hr"))
 ):
     """Dynamically generate summary and screening questions compared specifically against a target job JD."""
+    cache_key = f"{app_id}_{job_id}"
+    if cache_key in TAILORED_INSIGHTS_CACHE:
+        print(f"Memory cache HIT for candidate {app_id} matching job {job_id}!")
+        return TAILORED_INSIGHTS_CACHE[cache_key]
+
+    print(f"Memory cache MISS for candidate {app_id} matching job {job_id}. Fetching dynamic insights from LLM...")
     app = db.query(models.Application).filter(models.Application.id == app_id).first()
     if not app:
         raise HTTPException(status_code=404, detail="Candidate application not found")
@@ -599,10 +609,14 @@ Summary:"""
             missing_skills=missing_skills
         )
 
-        return {
+        insights_result = {
             "summary": tailored_summary,
             "questions": tailored_questions,
             "skills": entities.get("skills", [])
         }
+
+        # Save to memory cache
+        TAILORED_INSIGHTS_CACHE[cache_key] = insights_result
+        return insights_result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate tailored insights: {str(e)}")
